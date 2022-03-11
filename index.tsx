@@ -13,7 +13,7 @@ import 'react-toastify/dist/ReactToastify.css'
 
 import { MetaMaskInpageProvider } from '@metamask/providers'
 
-import { Connection, PublicKey, Transaction, clusterApiUrl, SystemProgram } from '@solana/web3.js'
+import { Connection, PublicKey, Transaction, clusterApiUrl } from '@solana/web3.js'
 
 import { getNetworkById } from './networks'
 
@@ -503,7 +503,7 @@ const Wallet = props => {
         ...{
           isConnected: true,
           name: 'Phantom',
-          provider: null,
+          provider: window.solana,
           web3: null,
           chainId: chainId,
           address: address_,
@@ -660,18 +660,18 @@ const Wallet = props => {
     }
   }
 
-  const sendTx = async rawTx => {
-    console.log('[Wallet] sendTx', rawTx)
+  const sendTx = async transaction => {
+    console.log('[Wallet] sendTx', transaction)
 
     if (state.name === 'MetaMask') {
       return await state.provider.request({
         method: 'eth_sendTransaction',
-        params: [rawTx]
+        params: [transaction]
       })
     }
 
     if (state.name === 'WalletConnect') {
-      return await connector.sendTransaction(rawTx)
+      return await connector.sendTransaction(transaction)
     }
 
     if (state.name === 'Phantom') {
@@ -689,43 +689,28 @@ const Wallet = props => {
       const connection = new Connection(solanaNetwork)
       const provider = window.solana
 
-      const createTransferTransaction = async () => {
-        if (!provider.publicKey) return
-        let transaction = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: provider.publicKey,
-            toPubkey: provider.publicKey,
-            lamports: 1000000
-          })
-        )
-        transaction.feePayer = provider.publicKey
-        console.log('Getting recent blockhash')
-        const anyTransaction: any = transaction
-        anyTransaction.recentBlockhash = (await connection.getRecentBlockhash()).blockhash
-        return transaction
+      transaction.feePayer = provider.publicKey
+      console.log('Getting recent blockhash')
+      //const anyTransaction: any = transaction
+      transaction.recentBlockhash = (await connection.getRecentBlockhash()).blockhash
+
+      try {
+        const signed = await provider.signTransaction(transaction)
+        console.log('Got signature, submitting transaction...')
+        const rawTx = signed.serialize()
+        let signature = await connection.sendRawTransaction(rawTx)
+        // todo: sendRawTransaction Commitment
+        console.log(`Tx submitted`, signature)
+
+        console.log(`Waiting for network confirmation...`)
+        await connection.confirmTransaction(signature)
+        console.log('Tx confirmed!', signature)
+        console.log(`See explorer:`)
+        console.log(`https://solscan.io/tx/${signature}?cluster=testnet`)
+      } catch (err) {
+        console.warn(err)
+        console.log('[Wallet error] sendTransaction: ' + JSON.stringify(err))
       }
-
-      const sendTransaction = async () => {
-        try {
-          const transaction = await createTransferTransaction()
-          if (!transaction) return
-          let signed = await provider.signTransaction(transaction)
-          console.log('Got signature, submitting transaction...')
-          let signature = await connection.sendRawTransaction(signed.serialize())
-          console.log(`Tx submitted`, signature)
-
-          console.log(`Waiting for network confirmation...`)
-          await connection.confirmTransaction(signature)
-          console.log('Tx confirmed!', signature)
-          console.log(`See explorer:`)
-          console.log(`https://solscan.io/tx/${signature}?cluster=testnet`)
-        } catch (err) {
-          console.warn(err)
-          console.log('[Wallet error] sendTransaction: ' + JSON.stringify(err))
-        }
-      }
-
-      return await sendTransaction()
     }
   }
 
