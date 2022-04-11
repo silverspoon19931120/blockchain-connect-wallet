@@ -15,10 +15,7 @@ import { MetaMaskInpageProvider } from '@metamask/providers'
 
 import { Connection, PublicKey, Transaction, clusterApiUrl } from '@solana/web3.js'
 
-import * as nearAPI from "near-api-js";
-
 import { getNetworkById } from './networks'
-import { WalletConnection } from 'near-api-js'
 
 declare global {
   interface Window {
@@ -30,8 +27,8 @@ declare global {
 interface WalletInterface {
   isLoading: boolean
   isConnected: boolean
-  name: null | 'WalletConnect' | 'MetaMask' | 'Phantom' | 'Near'
-  chainId: null | number | 'solana-testnet' | 'solana-mainnet' | 'testnet' | 'mainnet'
+  name: null | 'WalletConnect' | 'MetaMask' | 'Phantom'
+  chainId: null | number
   address: string | null
   addressShort: string | null
   addressDomain: null | string
@@ -64,8 +61,7 @@ export const WalletContext = createContext<WalletInterface>({
 const names = {
   WalletConnect: 'WalletConnect',
   MetaMask: 'MetaMask',
-  Phantom: 'Phantom',
-  Near: 'Near'
+  Phantom: 'Phantom'
 }
 
 /*
@@ -116,10 +112,10 @@ const goPhantom = () => {
 interface StateProps {
   isLoading: boolean
   isConnected: boolean
-  name: null | 'WalletConnect' | 'MetaMask' | 'Phantom' | 'Near'
+  name: null | 'WalletConnect' | 'MetaMask' | 'Phantom'
   provider: any
   web3: Web3 | null
-  chainId: null | number | 'solana-testnet' | 'solana-mainnet' | 'testnet' | 'mainnet'
+  chainId: null | number
   address: string | null
   addressShort: string | null
   addressDomain: string | null
@@ -218,7 +214,12 @@ const Wallet = props => {
 
     const savedName = localStorage.getItem('web3-wallets-name')
     if (!savedName || savedName === names.MetaMask) {
-      return await connectMetamask()
+      const isUnlocked = window.ethereum?._metamask?.isUnlocked && await window.ethereum._metamask.isUnlocked()
+      if (isUnlocked) {
+        return await connectMetamask()
+      } else {
+        return false
+      }
     }
     if (savedName === names.WalletConnect) {
       // todo: restore WC session
@@ -226,22 +227,12 @@ const Wallet = props => {
     if (savedName === names.Phantom) {
       return await connectPhantom()
     }
-    if (savedName === names.Near) {
-      const chainId = localStorage.getItem('web3-wallets-near-chain')!
-      const contractId = localStorage.getItem('web3-wallets-near-contract')!
-      return await connectNear(chainId, contractId)
-    }
   }
 
   const connectMetamask = async (chainId?: string | number) => {
     if (!window.ethereum || !window.ethereum.isMetaMask) {
       return false
     }
-
-    /*const isUnlocked = await window.ethereum._metamask.isUnlocked()
-    if (!isUnlocked) {
-      return false
-    }*/
 
     const provider_ = window.ethereum
     const chainIdHex_ = provider_.chainId
@@ -512,8 +503,8 @@ const Wallet = props => {
     })
   }
 
-  const connectPhantom = async (chainId = 'solana-mainnet') => {
-    if (chainId !== 'solana-testnet' && chainId !== 'solana-mainnet') {
+  const connectPhantom = async (chainId = -1) => {
+    if (chainId !== -1 && chainId !== -1001) {
       throw new Error(`Unknown Phantom chainId ${chainId}`)
     }
     try {
@@ -545,58 +536,6 @@ const Wallet = props => {
       }
       console.error('[Wallet]', err)
     }
-  }
-
-  const connectNear = async (chainId: string, contractId: string) => {
-    if (chainId !== 'testnet' && chainId !== 'mainnet') {
-      throw new Error(`Unknown Near chainId ${chainId}`)
-    }
-
-    const { connect, keyStores, WalletConnection } = nearAPI
-
-    const config = {
-      networkId: chainId,
-      keyStore: new keyStores.BrowserLocalStorageKeyStore(),
-      nodeUrl: `https://rpc.${chainId}.near.org`,
-      walletUrl: `https://wallet.${chainId}.near.org`,
-      helperUrl: `https://helper.${chainId}.near.org`,
-      explorerUrl: `https://explorer.${chainId}.near.org`,
-      headers: {},
-    }
-
-    const near = await connect(config)
-
-    const wallet = new WalletConnection(near, null)
-
-    if (wallet.isSignedIn()) {
-      setState(prev => ({
-        ...prev,
-        ...{
-          isConnected: true,
-          name: 'Near',
-          provider: wallet,
-          web3: null,
-          chainId: chainId,
-          address: wallet.account().accountId,
-          addressShort: null,
-          addressDomain: null
-        }
-      }))
-      return true
-    }
-
-    // Перебрасывает на страницу с логином.
-    wallet.requestSignIn(
-      contractId, // contract requesting access
-      // NEAR-TODO:
-      // "Example App", // optional
-      // "http://YOUR-URL.com/success", // optional
-      // "http://YOUR-URL.com/failure" // optional
-    ).then(() => {
-      localStorage.setItem('web3-wallets-name', names.Near)
-      localStorage.setItem('web3-wallets-near-chain', chainId)
-      localStorage.setItem('web3-wallets-near-contract', contractId)
-    })
   }
 
   const dropWC = () => {
@@ -644,7 +583,7 @@ const Wallet = props => {
     }))
   }
 
-  const connect = async ({ name, chainId, contractId }) => {
+  const connect = async ({ name, chainId }) => {
     console.log('Wallet.connect()', name, chainId)
     if (!names[name]) {
       console.error(`Unknown wallet name: ${name}`)
@@ -670,10 +609,6 @@ const Wallet = props => {
         return false
       }
       return await connectPhantom(chainId)
-    }
-
-    if (name === 'Near') {
-      return await connectNear(chainId, contractId)
     }
   }
 
@@ -740,6 +675,9 @@ const Wallet = props => {
     if (state.name === 'WalletConnect') {
       // todo (show new QR)
     }
+    if (name === 'Phantom') { // todo: make something better
+      return true
+    }
   }
 
   const sendTx = async (transaction, { signers = [] } = {}) => {
@@ -758,10 +696,10 @@ const Wallet = props => {
 
     if (state.name === 'Phantom') {
       let cluster
-      if (state.chainId === 'solana-testnet') {
+      if (state.chainId === -1001) {
         cluster = 'testnet'
       }
-      if (state.chainId === 'solana-mainnet') {
+      if (state.chainId === -1) {
         cluster = 'mainnet-beta'
       }
       if (!cluster) {
@@ -826,10 +764,6 @@ const Wallet = props => {
       window.solana.disconnect()
     }
 
-    if (state.name === 'Near') {
-      state.provider.signOut()
-    }
-
     setState(prev => ({
       ...prev,
       ...{
@@ -873,8 +807,8 @@ const Wallet = props => {
 
 export default Wallet
 
-export const isValidAddress = (chainId: number | 'solana-testnet' | 'solana-mainnet', address: string) => {
-  if (chainId === -1 || chainId === 'solana-testnet' || chainId === 'solana-mainnet') {
+export const isValidAddress = (chainId: number, address: string) => {
+  if (chainId === -1 || chainId === -1001) {
     try {
       return Boolean(new PublicKey(address))
     } catch (e) {
@@ -891,4 +825,13 @@ export const shortenAddress = address => {
       ? [address.slice(0, address.slice(0, 2) === '0x' ? 6 : 4), '...', address.slice(address.length - 4)].join('')
       : null
   return result
+}
+
+export const nativeTokenAddress = (chainId: number) => {
+  if (chainId === -1 || chainId === -1001) {
+    return 'So11111111111111111111111111111111111111111'
+  }
+  if (chainId > 0) {
+    return '0x0000000000000000000000000000000000000000'
+  }
 }
