@@ -16,6 +16,7 @@ import { MetaMaskInpageProvider } from '@metamask/providers'
 import { Connection, PublicKey, Transaction, clusterApiUrl } from '@solana/web3.js'
 
 import { getNetworkById } from './networks'
+import { checkEnsValid, parseAddressFromEnsSolana } from './utils/solana'
 
 declare global {
   interface Window {
@@ -214,7 +215,7 @@ const Wallet = props => {
 
     const savedName = localStorage.getItem('web3-wallets-name')
     if (savedName === names.MetaMask) {
-      const isUnlocked = window.ethereum?._metamask?.isUnlocked && await window.ethereum._metamask.isUnlocked()
+      const isUnlocked = window.ethereum?._metamask?.isUnlocked && (await window.ethereum._metamask.isUnlocked())
       if (isUnlocked) {
         return await connectMetamask()
       } else {
@@ -389,10 +390,14 @@ const Wallet = props => {
         console.info('walletChainId', walletChainId)
 
         if (walletChainId !== dappChainId) {
+          /*
+            Note: WalletConnect v1 is not able to switch networks
+          */
           toast.warn('Wrong wallet network — disconnected')
-          /*console.warn('(Rejected) Select the correct network in your wallet')*/
-          resolve(true) // to close modalbox
+          console.warn('[Wallet] Wrong wallet network — disconnected')
           connector.killSession()
+          resolve(false)
+          return
         }
 
         const address_ = accounts[0]
@@ -675,7 +680,8 @@ const Wallet = props => {
     if (state.name === 'WalletConnect') {
       // todo (show new QR)
     }
-    if (name === 'Phantom') { // todo: make something better
+    if (name === 'Phantom') {
+      // todo: make something better
       return true
     }
   }
@@ -718,49 +724,6 @@ const Wallet = props => {
         console.log('partialSigned')
       }
 
-      const retrySendSignedTransaction = async (
-        connection: Connection, 
-        rawTx: Buffer | Uint8Array | number[]
-      ) => {
-        class TimeoutError extends Error { // TODO: JSON.stringify returns null
-          constructor() {
-            super('')
-          }
-        }
-
-        const MAX_ATTEMPTS = 3
-        const SEND_TIMEOUT_SECS = 12
-
-        for (let i = 0; i < MAX_ATTEMPTS; i++) {
-          if (i > 0) {
-            console.log('Transaction didn\'t reach the node, retrying...')
-          }
-          try {
-            let signature = await connection.sendRawTransaction(rawTx)
-            console.log(`Tx submitted`, signature)
-            console.log(`Waiting for network confirmation...`)
-
-            await Promise.race([
-              connection.confirmTransaction(signature, 'confirmed'),
-              new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), SEND_TIMEOUT_SECS * 1e3))
-            ])
-          } catch (err) {
-            if (err instanceof TimeoutError) {
-              continue
-            }
-            throw err
-          }
-          return
-        }
-        console.log('Retry limit reached')
-        throw TimeoutError
-      }
-
-      const logError = (err) => {
-        console.warn(err)
-        console.log('[Wallet error] sendTransaction: ' + JSON.stringify(err))
-      }
-
       try {
         const signed = await provider.signTransaction(transaction)
         console.log('signed', signed)
@@ -768,23 +731,18 @@ const Wallet = props => {
         const rawTx = signed.serialize()
         let signature = await connection.sendRawTransaction(rawTx)
         // todo: sendRawTransaction Commitment
+        console.log(`Tx submitted`, signature)
         ;(async () => {
-          let success = true
-          await retrySendSignedTransaction(connection, rawTx).catch((err) => { // TODO: Exception is not caught otherwise?
-            success = false
-            logError(err)
-          })
-          if (success) {
-            console.log('Tx confirmed!', signature)
-            console.log(`See explorer:`)
-            console.log(`https://solscan.io/tx/${signature}${cluster === 'testnet' ? '?cluster=testnet' : ''}`)
-          } else {
-            return
-          }
+          console.log(`Waiting for network confirmation...`)
+          await connection.confirmTransaction(signature)
+          console.log('Tx confirmed!', signature)
+          console.log(`See explorer:`)
+          console.log(`https://solscan.io/tx/${signature}${cluster === 'testnet' ? '?cluster=testnet' : ''}`)
         })()
         return signature
       } catch (err) {
-        logError(err)
+        console.warn(err)
+        console.log('[Wallet error] sendTransaction: ' + JSON.stringify(err))
       }
     }
   }
@@ -855,12 +813,22 @@ const Wallet = props => {
 
 export default Wallet
 
-export const isValidAddress = (chainId: number, address: string) => {
+export const isValidAddress = async (chainId: number, address: string) => {
   if (chainId > 0) {
+    if (address.slice(-4) === '.eth') {
+      const rpc = getNetworkById(1).rpc_url
+      const provider = new Web3.providers.HttpProvider(rpc)
+      const result = await new Web3(provider).eth.ens.getAddress(address)
+      return !!result
+    }
     return Web3.utils.isAddress(address)
   }
   if (chainId === -1 || chainId === -1001) {
     try {
+      if (address.slice(-4) === '.sol') {
+        await checkEnsValid(address)
+        return true
+      }
       return Boolean(new PublicKey(address))
     } catch (e) {
       return false
@@ -871,17 +839,28 @@ export const isValidAddress = (chainId: number, address: string) => {
     // EQBj0KYB_PG6zg_F3sjLwFkJ5C02aw0V10Dhd256c-Sr3BvF
     // EQCudP0_Xu7qi-aCUTCNsjXHvi8PNNL3lGfq2Wcmbg2oN-Jg
     // EQAXqKCSrUFgPKMlCKlfyT2WT7GhVzuHyXiPtDvT9s5FMp5o
-    return address.length === 48 && address.slice(0, 2) === 'EQ' && /^[a-zA-Z0-9_-]*$/.test(address)
+    return (
+      address.length === 48 &&
+      (address.slice(0, 2) === 'EQ' ||
+        address.slice(0, 2) === 'kQ' ||
+        address.slice(0, 2) === 'Ef' ||
+        address.slice(0, 2) === 'UQ') &&
+      /^[a-zA-Z0-9_-]*$/.test(address)
+    )
   }
   throw new Error(`Not implemented or wrong chainId ${chainId}`)
 }
 
 export const shortenAddress = address => {
-  const result =
-    typeof address === 'string'
-      ? [address.slice(0, address.slice(0, 2) === '0x' ? 6 : 4), '...', address.slice(address.length - 4)].join('')
-      : null
-  return result
+  if (typeof address === 'string') {
+    if (address.at(-4) === '.') {
+      return address
+    } else {
+      return [address.slice(0, address.slice(0, 2) === '0x' ? 6 : 4), '...', address.slice(address.length - 4)].join('')
+    }
+  }
+
+  return ''
 }
 
 export const nativeTokenAddress = (chainId: number) => {
@@ -890,5 +869,18 @@ export const nativeTokenAddress = (chainId: number) => {
   }
   if (chainId > 0) {
     return '0x0000000000000000000000000000000000000000'
+  }
+}
+
+export const parseAddressFromEns = async (input: string) => {
+  if (input.slice(-4) === '.sol') {
+    return await parseAddressFromEnsSolana(input)
+  } else if (input.slice(-4) === '.eth') {
+    const rpc = getNetworkById(1).rpc_url
+    const provider = new Web3.providers.HttpProvider(rpc)
+    const result = await new Web3(provider).eth.ens.getAddress(input)
+    return result
+  } else {
+    return input
   }
 }
