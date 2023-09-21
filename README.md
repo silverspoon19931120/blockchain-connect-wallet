@@ -25,9 +25,9 @@
 - MetaMask
 - WalletConnect (all WalletConnect-compatible wallets are supported, **>100 wallets!**)
 - Coinbase Wallet
+- XDEFI (EVM networks, Bitcoin, Bitcoin Cash, Litecoin, Dogecoin, Solana, Near, all Cosmos chains)
 - Phantom (Solana)
 - Keplr (Cosmos, Osmosis, Astar)
-- xDeFi (EVM networks, Bitcoin, Bitcoin Cash, Litecoin)
 - Safe (aka Gnosis Safe Multisig Wallet)
 
 
